@@ -919,9 +919,150 @@ body.app.is-leaving { animation: app-leave .22s ease-in both; }
     return erstes;
   }
 
+
+  /*
+   * Eigener PDF-Export (ohne Druckdialog): keine Kopf-/Fußzeilen des Browsers
+   * (Safari auf dem iPhone fügt sonst URL, Datum und Seitenzahl ein).
+   * Das Blatt wird aus den Positionen der Elemente als Vektor-PDF mit Helvetica gezeichnet.
+   */
+  const PDF_ZEICHEN = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~äöüÄÖÜß§–€°´’";
+  const PDF_BREITEN = { n: [278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, 1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556, 333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556, 556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584, 556, 556, 556, 667, 778, 722, 611, 556, 556, 556, 400, 333, 222], b: [278, 333, 474, 556, 556, 889, 722, 238, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 333, 333, 584, 584, 584, 611, 975, 722, 722, 722, 722, 667, 611, 778, 722, 278, 556, 722, 611, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 333, 278, 333, 584, 556, 333, 556, 611, 556, 611, 556, 333, 611, 611, 278, 278, 556, 278, 889, 611, 611, 611, 611, 389, 556, 333, 611, 556, 778, 556, 556, 500, 389, 280, 389, 584, 556, 611, 611, 722, 778, 722, 611, 556, 556, 556, 400, 333, 278] }; // Helvetica-Breiten in 1/1000 em
+  const CP1252 = { "–": 0x96, "€": 0x80, "’": 0x92, "´": 0xb4 };
+
+  function textBreite(text, fett, groesse, abstand) {
+    const tab = fett ? PDF_BREITEN.b : PDF_BREITEN.n;
+    let w = 0;
+    for (const ch of text) { const i = PDF_ZEICHEN.indexOf(ch); w += i < 0 ? 556 : tab[i]; }
+    return (w / 1000) * groesse + abstand * text.length;
+  }
+
+  function pdfText(text) {
+    let s = "";
+    for (const ch of text) {
+      let c = CP1252[ch] ?? ch.charCodeAt(0);
+      if (c > 255 || (c >= 0x80 && c < 0xa0 && !Object.values(CP1252).includes(c))) c = 0x3f; // "?"
+      const z = String.fromCharCode(c);
+      s += z === "(" || z === ")" || z === "\\" ? "\\" + z : z;
+    }
+    return s;
+  }
+
+  function pdfErstellen() {
+    const blatt = document.querySelector(".page");
+    const B = 905, H = 1280, K = 0.75;          // px -> pt
+    const X = (px) => (px * K).toFixed(2);
+    const Y = (px) => ((H - px) * K).toFixed(2);
+    const zahl = (v) => parseFloat(v) || 0;
+    const ops = [];
+
+    // Graue Flächen
+    blatt.querySelectorAll(":scope > .grey").forEach((el) => {
+      const s = el.style;
+      ops.push(`0.902 g ${X(zahl(s.left))} ${Y(zahl(s.top) + zahl(s.height))} ${X(zahl(s.width))} ${X(zahl(s.height))} re f`);
+    });
+    // Linien
+    ops.push("0.75 w");
+    blatt.querySelectorAll(":scope > .hl").forEach((el) => {
+      const s = el.style, y = zahl(s.top) + 0.5;
+      const grau = s.borderColor ? "0.6 G" : "0 G";
+      ops.push(`${grau} ${X(zahl(s.left))} ${Y(y)} m ${X(zahl(s.left) + zahl(s.width))} ${Y(y)} l S`);
+    });
+    blatt.querySelectorAll(":scope > .vl").forEach((el) => {
+      const s = el.style, x = zahl(s.left) + 0.5;
+      ops.push(`0 G ${X(x)} ${Y(zahl(s.top))} m ${X(x)} ${Y(zahl(s.top) + zahl(s.height))} l S`);
+    });
+    const r = blatt.querySelector(".frame");
+    const rs = getComputedStyle(r);
+    const fx = zahl(rs.left) + 0.5, fy = zahl(rs.top) + 0.5, fw = zahl(rs.width) - 1, fh = zahl(rs.height) - 1;
+    ops.push(`0 G ${X(fx)} ${Y(fy + fh)} ${X(fw)} ${X(fh)} re S`);
+
+    // Texte
+    ops.push("0 g");
+    blatt.querySelectorAll(":scope > .t").forEach((el) => {
+      const text = el.textContent;
+      if (!text.trim()) return;
+      const s = el.style;
+      const titel = el.classList.contains("title");
+      const fett = titel || el.classList.contains("b");
+      const groesse = titel ? 21.5 : 15.1;
+      const abstand = zahl(s.letterSpacing);
+      const breite = textBreite(text, fett, groesse, abstand);
+      let x;
+      if (el.classList.contains("c")) x = zahl(s.left) + (zahl(s.width) - breite) / 2;
+      else if (s.right) x = B - zahl(s.right) - breite;
+      else x = zahl(s.left);
+      x += 1.5; // wie die Druckkorrektur (.t translateX), an das Original angeglichen
+      const grundlinie = zahl(s.top) + groesse * 0.8465; // wie im Browser (Arial-Metrik, line-height = Schriftgröße)
+      ops.push(`BT /${fett ? "F2" : "F1"} ${(groesse * K).toFixed(3)} Tf ${(abstand * K).toFixed(3)} Tc ${X(x)} ${Y(grundlinie)} Td (${pdfText(text)}) Tj ET`);
+      if (el.classList.contains("u")) {
+        const uy = grundlinie + 3.2;
+        ops.push(`0 G ${X(x)} ${Y(uy)} m ${X(x + breite)} ${Y(uy)} l S`);
+      }
+    });
+
+    const inhalt = ops.join("\n");
+    const objekte = [
+      "<< /Type /Catalog /Pages 2 0 R >>",
+      "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${X(B)} ${X(H)}] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>`,
+      "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+      "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>",
+      `<< /Length ${inhalt.length} >>\nstream\n${inhalt}\nendstream`,
+      `<< /Title (${pdfText(document.title)}) /Producer (Document Center) >>`,
+    ];
+    let pdf = "%PDF-1.4\n%\xe2\xe3\xcf\xd3\n";
+    const pos = [];
+    objekte.forEach((o, i) => { pos.push(pdf.length); pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+    const xref = pdf.length;
+    pdf += `xref\n0 ${objekte.length + 1}\n0000000000 65535 f \n`;
+    pos.forEach((p) => { pdf += String(p).padStart(10, "0") + " 00000 n \n"; });
+    pdf += `trailer\n<< /Size ${objekte.length + 1} /Root 1 0 R /Info ${objekte.length} 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+    const bytes = new Uint8Array(pdf.length);
+    for (let i = 0; i < pdf.length; i++) bytes[i] = pdf.charCodeAt(i);
+    return bytes;
+  }
+
+  // Nur Safari auf iPhone/iPad: dessen Druckdialog fügt URL, Datum und Seitenzahl ein
+  // -> PDF selbst erzeugen. Andere Browser (auch Chrome auf dem iPhone) drucken sauber.
+  const ua = navigator.userAgent;
+  const istIOS = /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  const istIOSSafari = istIOS && /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS|YaBrowser|DuckDuckGo|GSA\//.test(ua);
+
+  function pdfDatei() {
+    const name = document.title.replace(/[\\/:*?"<>|]/g, "-") + ".pdf";
+    return new File([pdfErstellen()], name, { type: "application/pdf" });
+  }
+
+  function pdfHerunterladen(datei) {
+    const url = URL.createObjectURL(datei);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = datei.name;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+
+  function pdfSpeichern() {
+    if (istIOSSafari) {
+      // Teilen-Menü mit „In Dateien sichern“
+      const datei = pdfDatei();
+      if (navigator.canShare && navigator.canShare({ files: [datei] })) {
+        navigator.share({ files: [datei], title: datei.name }).catch((e) => {
+          if (e.name !== "AbortError") pdfHerunterladen(datei);
+        });
+      } else {
+        pdfHerunterladen(datei);
+      }
+    } else {
+      window.print();
+    }
+  }
+
   document.getElementById("print-btn").addEventListener("click", () => {
     if (fehlendePflichtfelder(lohnzettel).length) oeffnen(true);
-    else window.print();
+    else pdfSpeichern();
   });
 
   function abbrechen() {

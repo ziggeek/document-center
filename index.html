@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#2f5bd8">
+<meta name="format-detection" content="telephone=no, date=no, address=no, email=no">
 <title>Document Center</title>
 <!-- Automatisch erzeugt mit build.py – Änderungen bitte in den Quelldateien vornehmen. -->
 <style>
@@ -282,6 +283,11 @@ body.app.is-leaving { animation: app-leave .22s ease-in both; }
   @keyframes shake { 25% { transform: translateX(-3px); } 75% { transform: translateX(3px); } }
   .t { transition: color .4s; }
   [data-field].updated { animation: flash .9s ease; }
+  /* iOS Safari: automatisch erkannte Telefonnummern/Daten nicht als Link darstellen */
+  .page a[x-apple-data-detectors], .page a[href^="tel:"] {
+    color: inherit !important; text-decoration: none !important;
+    font: inherit !important; pointer-events: none;
+  }
   @keyframes flash { 0% { background: transparent; } 20% { background: #fff3b0; } 100% { background: transparent; } }
   @media (max-width: 640px) { .editor label { grid-template-columns: 1fr; gap: 4px; } .editor .feld-fehler { grid-column: 1; } }
   .editor label.pflicht > span::after { content: " *"; color: var(--danger); }
